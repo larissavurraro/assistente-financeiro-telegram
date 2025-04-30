@@ -9,3 +9,4 @@ gTTS
 pydub
 openai-whisper
 apscheduler
+gunicorn
