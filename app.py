@@ -181,7 +181,7 @@ def receber_telegram():
             "- resumo do Thiago\n\n"
             "🔉 *Também aceitamos mensagens de áudio!*"
         )
-        bot.send_message(chat_id=chat_id, text=ajuda, parse_mode=telegram.ParseMode.MARKDOWN)
+        bot.send_message(chat_id=chat_id, text=ajuda, parse_mode="Markdown")
     return "ok"
 
 if __name__ == "__main__":
