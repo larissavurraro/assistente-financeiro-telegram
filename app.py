@@ -35,12 +35,12 @@ spreadsheet = client.open_by_key("1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8")
 sheet = spreadsheet.sheet1
 
 # Telegram
-telegram_token = os.environ.get("7993885954:AAFUOPbzYoyaczxorvvPVC1undrNSImBkyk")
+telegram_token = os.environ.get("7859891222:AAE5UJ3geROpfpsupKjDl4eo5_KQ2QP7Gdo")
 bot = telegram.Bot(token=telegram_token)
 
 contatos = [
     {"nome": "Larissa", "chat_id": int(os.environ.get("@larissavurraro", "0"))},
-    {"nome": "Thiago", "chat_id": int(os.environ.get("THIAGO_CHAT_ID", "0"))}
+    {"nome": "Thiago", "chat_id": int(os.environ.get("@larissavurraro", "0"))}
 ]
 
 def enviar_lembrete():
