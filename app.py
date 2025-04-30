@@ -25,7 +25,6 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
 
-# Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 json_creds = os.environ.get("GOOGLE_CREDS_JSON")
 creds_dict = json.loads(json_creds)
@@ -34,25 +33,19 @@ client = gspread.authorize(creds)
 spreadsheet = client.open_by_key("1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8")
 sheet = spreadsheet.sheet1
 
-# Telegram
-telegram_token = os.environ.get("7859891222:AAE5UJ3geROpfpsupKjDl4eo5_KQ2QP7Gdo")
+telegram_token = os.environ.get("TELEGRAM_TOKEN")
 bot = telegram.Bot(token=telegram_token)
 
 contatos = [
-    {"nome": "Larissa", "chat_id": int(os.environ.get("@larissavurraro", "0"))},
-    {"nome": "Thiago", "chat_id": int(os.environ.get("@larissavurraro", "0"))}
+    {"nome": "Larissa", "chat_id": int(os.environ.get("LARISSA_CHAT_ID", "0"))},
+    {"nome": "Thiago", "chat_id": int(os.environ.get("THIAGO_CHAT_ID", "0"))}
 ]
 
 def enviar_lembrete():
     for contato in contatos:
         nome = contato["nome"]
         chat_id = contato["chat_id"]
-        if nome.upper() == "LARISSA":
-            mensagem = "🔔 Oi Larissa! Já cadastrou suas despesas de hoje? 📝"
-        elif nome.upper() == "THIAGO":
-            mensagem = "🔔 Oi Thiago! Já cadastrou suas despesas de hoje? 💸"
-        else:
-            mensagem = "🔔 Lembrete: não esqueça de registrar suas despesas hoje! 😉"
+        mensagem = f"🔔 Oi {nome}! Já cadastrou suas despesas de hoje? 💰"
         try:
             bot.send_message(chat_id=chat_id, text=mensagem)
             logger.info(f"Lembrete enviado para {nome} ({chat_id})")
@@ -147,8 +140,7 @@ def receber_telegram():
             categoria = r.get("Categoria", "OUTROS")
             valor = parse_valor(r.get("Valor", "0"))
             categorias[categoria] = categorias.get(categoria, 0) + valor
-        resumo = f"📊 Resumo Geral:
-Total: {formatar_valor(total)}"
+        resumo = f"📊 Resumo Geral:\nTotal: {formatar_valor(total)}"
         labels = list(categorias.keys())
         valores = list(categorias.values())
         grafico = gerar_grafico('pizza', 'Resumo Geral', valores, labels)
@@ -173,36 +165,20 @@ Total: {formatar_valor(total)}"
             valor_float = parse_valor(valor)
             valor_formatado = formatar_valor(valor_float)
             sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
-            resposta = f"✅ Despesa registrada!
-📅 Data: {data_formatada}
-📂 Categoria: {categoria}
-📝 Descrição: {descricao}
-👤 Responsável: {responsavel}
-💰 Valor: {valor_formatado}"
+            resposta = f"✅ Despesa registrada!\n📅 Data: {data_formatada}\n📂 Categoria: {categoria}\n📝 Descrição: {descricao}\n👤 Responsável: {responsavel}\n💰 Valor: {valor_formatado}"
             bot.send_message(chat_id=chat_id, text=resposta)
             audio = gerar_audio(resposta)
             bot.send_audio(chat_id=chat_id, audio=open(audio, 'rb'))
     else:
         ajuda = (
-            "🤖 *Assistente Financeiro - Comandos disponíveis:*
-
-"
-            "📌 *Registrar despesas:*
-"
-            "`Larissa, 28/04, mercado, compras, 150`
-"
-            "(formato: responsável, data, local, descrição, valor)
-
-"
-            "📊 *Ver resumos:*
-"
-            "- resumo geral
-"
-            "- resumo da Larissa
-"
-            "- resumo do Thiago
-
-"
+            "🤖 *Assistente Financeiro - Comandos disponíveis:*\n\n"
+            "📌 *Registrar despesas:*\n"
+            "`Larissa, 28/04, mercado, compras, 150`\n"
+            "(formato: responsável, data, local, descrição, valor)\n\n"
+            "📊 *Ver resumos:*\n"
+            "- resumo geral\n"
+            "- resumo da Larissa\n"
+            "- resumo do Thiago\n\n"
             "🔉 *Também aceitamos mensagens de áudio!*"
         )
         bot.send_message(chat_id=chat_id, text=ajuda, parse_mode=telegram.ParseMode.MARKDOWN)
@@ -211,4 +187,3 @@ Total: {formatar_valor(total)}"
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
