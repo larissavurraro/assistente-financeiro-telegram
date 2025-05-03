@@ -1,448 +1,452 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-from flask import Flask, request
+import logging
+import os
+import datetime
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, timedelta
-import os, json, uuid, requests, logging, subprocess, traceback
-from pydub import AudioSegment
-from gtts import gTTS
-import whisper
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
-import numpy as np
-import telegram
-from apscheduler.schedulers.background import BackgroundScheduler
+from google.oauth2.service_account import Credentials
+from telegram import Update, Voice
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+from telegram.constants import ParseMode
 
-# ========== CONFIGURAÇÃO ==========
-app = Flask(__name__)
-app.secret_key = 'sua_chave_secreta_aqui'
+# --- Configuração ---
+# Use variáveis de ambiente para segurança
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "SEU_TOKEN_AQUI")
+GOOGLE_SHEETS_CREDENTIALS_PATH = os.environ.get(
+    "GOOGLE_SHEETS_CREDENTIALS_PATH", "caminho/para/seu/credentials.json"
+)
+GOOGLE_SHEETS_ID = os.environ.get("GOOGLE_SHEETS_ID", "SEU_ID_DA_PLANILHA_AQUI")
+GOOGLE_SHEETS_NAME = os.environ.get("GOOGLE_SHEETS_NAME", "NomeDaAba")
 
-STATIC_DIR = "static"
-BASE_URL = os.environ.get("BASE_URL", "https://assistente-financeiro.onrender.com")
-os.makedirs(STATIC_DIR, exist_ok=True)
+# Configuração de Logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler("finance_bot.log"), # Salva logs em arquivo
+        logging.StreamHandler() # Mostra logs no console
+    ]
+)
+logger = logging.getLogger(__name__)
 
-logger = logging.getLogger()
-logging.basicConfig(level=logging.INFO)
-
-# ========== GOOGLE SHEETS ==========
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-json_creds = os.environ.get("GOOGLE_CREDS_JSON")
-if not json_creds:
-    raise Exception("Variável de ambiente GOOGLE_CREDS_JSON não definida!")
-
-creds_dict = json.loads(json_creds)
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-gc = gspread.authorize(creds)
-
-SHEET_ID = "1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8"
-try:
-    spreadsheet = gc.open_by_key(SHEET_ID)
-    sheet = spreadsheet.sheet1
-    # Teste de escrita
-    try:
-        sheet.append_row(['01/01/2025', 'TESTE', 'TESTE', 'BOT', 'R$0,00'])
-        logger.info("Teste de escrita no Google Sheets OK.")
-    except Exception as e:
-        logger.error(f"Erro no teste de escrita ao Google Sheets: {e}")
-        logger.error(traceback.format_exc())
-except Exception as e:
-    logger.error("Erro na conexão com a planilha.")
-    logger.error(traceback.format_exc())
-    raise
-
-# ========== TELEGRAM ==========
-telegram_token = os.environ.get("TELEGRAM_TOKEN")
-if not telegram_token:
-    raise Exception("Variável de ambiente TELEGRAM_TOKEN não definida!")
-bot = telegram.Bot(token=telegram_token)
-
-# Corrija as variáveis de ambiente para esses nomes (substitua pelos IDs reais)
-contatos = [
-    {"nome": "Larissa", "chat_id": int(os.environ.get("LARISSA_CHAT_ID", 0))},
-    {"nome": "Thiago",  "chat_id": int(os.environ.get("THIAGO_CHAT_ID", 0))}
+# Escopos necessários para Google Sheets API
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
-# ========== AGENDAMENTO ==========
-def enviar_lembrete():
-    for contato in contatos:
-        nome = contato["nome"]
-        chat_id = contato["chat_id"]
-        mensagem = f"🔔 Oi {nome}! Já cadastrou suas despesas de hoje? 💰"
-        try:
-            if chat_id != 0:
-                bot.send_message(chat_id=chat_id, text=mensagem)
-                logger.info(f"Lembrete enviado para {nome} ({chat_id})")
-            else:
-                logger.warning(f"Chat ID do {nome} não configurado!")
-        except Exception as e:
-            logger.error(f"Erro ao enviar lembrete para {nome}: {e}")
-            logger.error(traceback.format_exc())
+# --- Funções Auxiliares ---
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(enviar_lembrete, 'cron', hour=20, minute=0)
-scheduler.start()
-
-# ========== FUNÇÕES AUXILIARES ==========
-def parse_valor(valor_str):
+def authenticate_google_sheets():
+    """Autentica com a API do Google Sheets e retorna o objeto da planilha."""
     try:
-        return float(str(valor_str).replace("R$", "").replace(".", "").replace(",", ".").strip())
-    except:
-        return 0.0
-
-def formatar_valor(valor):
-    return f"R${valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-palavras_categoria = {
-    "alimentação": ["mercado", "supermercado", "pão", "leite", "feira", "comida"],
-    "transporte": ["uber", "99", "ônibus", "metro", "trem", "corrida", "combustível", "gasolina"],
-    "lazer": ["cinema", "netflix", "bar", "show", "festa", "lazer"],
-    "moradia": ["aluguel", "condominio", "energia", "água", "internet", "luz"],
-    "saúde": ["farmácia", "higiene", "produto de limpeza", "remédio"]
-}
-
-def classificar_categoria(descricao):
-    desc = descricao.lower()
-    for categoria, palavras in palavras_categoria.items():
-        if any(p in desc for p in palavras):
-            return categoria.upper()
-    return "OUTROS"
-
-def gerar_audio(texto):
-    try:
-        audio_id = uuid.uuid4().hex
-        mp3_path = os.path.join(STATIC_DIR, f"audio_{audio_id}.mp3")
-        tts = gTTS(text=texto, lang='pt')
-        tts.save(mp3_path)
-        logger.info(f"Áudio gerado: {mp3_path}")
-        return mp3_path
+        creds = Credentials.from_service_account_file(
+            GOOGLE_SHEETS_CREDENTIALS_PATH, scopes=SCOPES
+        )
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(GOOGLE_SHEETS_ID)
+        worksheet = spreadsheet.worksheet(GOOGLE_SHEETS_NAME)
+        logger.info("Autenticação com Google Sheets bem-sucedida.")
+        return worksheet
+    except FileNotFoundError:
+        logger.error(f"Arquivo de credenciais não encontrado em: {GOOGLE_SHEETS_CREDENTIALS_PATH}")
+        return None
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Erro na API do Google Sheets durante autenticação/abertura: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Erro ao gerar áudio: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Erro inesperado durante autenticação com Google Sheets: {e}", exc_info=True)
         return None
 
-def convert_to_wav(input_path, output_path):
+def parse_expense_message(text: str) -> dict | None:
+    """
+    Analisa a mensagem do usuário para extrair os detalhes da despesa.
+    Formato esperado: "Responsável, [Data (DD/MM/YYYY ou 'hoje')], Descrição, Valor"
+    Retorna um dicionário com os dados ou None se o formato for inválido.
+    """
+    parts = [p.strip() for p in text.split(",")]
+
+    if len(parts) < 3 or len(parts) > 4:
+        logger.warning(f"Formato de mensagem inválido (partes={len(parts)}): {text}")
+        return None
+
     try:
-        result = subprocess.run([
-            "ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", output_path
-        ], capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"Erro na conversão com ffmpeg: {result.stderr}")
-            return False
-        return True
+        responsavel = parts[0]
+        valor_str = parts[-1]
+        # Tenta converter o valor para float, removendo 'R$' se presente
+        valor = float(valor_str.replace("R$", "").replace(",", ".").strip())
+
+        data_str = "hoje"
+        descricao = ""
+
+        if len(parts) == 4:
+            data_str = parts[1]
+            descricao = parts[2]
+        elif len(parts) == 3:
+            # Verifica se a segunda parte parece uma data ou é 'hoje'
+            # Se não for, assume que é a descrição e a data é 'hoje'
+            try:
+                # Tenta fazer parse como data ou verifica se é 'hoje'
+                if data_str.lower() != "hoje":
+                    datetime.datetime.strptime(parts[1], "%d/%m/%Y")
+                data_str = parts[1] # É uma data válida ou 'hoje'
+                descricao = "" # Sem descrição explícita neste formato simplificado? Ajustar se necessário
+                # NOTA: Este formato (Responsável, Data, Valor) é ambíguo sem descrição.
+                # Recomenda-se exigir 4 partes ou um delimitador mais claro.
+                # Por ora, vamos assumir que a parte do meio é a descrição se não for data
+                # (Esta lógica pode precisar de ajuste dependendo do uso real)
+
+                # Lógica Revisitada: Se tem 3 partes, a do meio é a descrição e a data é hoje.
+                descricao = parts[1]
+                data_str = "hoje"
+
+            except ValueError:
+                 # Se não for data válida, assume que é a descrição
+                descricao = parts[1]
+                data_str = "hoje"
+
+
+        if not responsavel or not descricao or valor <= 0:
+             logger.warning(f"Dados inválidos extraídos: R={responsavel}, Desc={descricao}, V={valor}")
+             return None # Garante que campos essenciais não estão vazios
+
+        # Processa a data
+        if data_str.lower() == "hoje":
+            data = datetime.date.today()
+        else:
+            try:
+                data = datetime.datetime.strptime(data_str, "%d/%m/%Y").date()
+            except ValueError:
+                logger.warning(f"Formato de data inválido: {data_str}")
+                return None # Data em formato incorreto
+
+        return {
+            "responsavel": responsavel,
+            "data": data.strftime("%d/%m/%Y"), # Formata para string
+            "descricao": descricao,
+            "valor": valor,
+        }
+    except ValueError:
+        logger.warning(f"Erro ao converter valor para número: {valor_str}")
+        return None
     except Exception as e:
-        logger.error(f"Falha ao executar ffmpeg: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Erro inesperado ao parsear mensagem '{text}': {e}", exc_info=True)
+        return None
+
+
+def classify_category(description: str) -> str:
+    """
+    Classifica a despesa em uma categoria com base na descrição.
+    (Implementação simples - pode ser expandida)
+    """
+    description_lower = description.lower()
+    if "mercado" in description_lower or "supermercado" in description_lower or "hortifruti" in description_lower:
+        return "Alimentação (Mercado)"
+    if "restaurante" in description_lower or "ifood" in description_lower or "lanche" in description_lower:
+        return "Alimentação (Restaurantes)"
+    if "uber" in description_lower or "99" in description_lower or "transporte" in description_lower or "gasolina" in description_lower or "combustível" in description_lower:
+        return "Transporte"
+    if "farmácia" in description_lower or "drogaria" in description_lower or "remédio" in description_lower:
+         return "Saúde"
+    if "luz" in description_lower or "água" in description_lower or "gás" in description_lower or "internet" in description_lower or "aluguel" in description_lower or "condomínio" in description_lower:
+        return "Contas Fixas"
+    if "lazer" in description_lower or "cinema" in description_lower or "show" in description_lower or "bar" in description_lower:
+        return "Lazer"
+    # Adicione mais categorias conforme necessário
+    return "Outros" # Categoria padrão
+
+
+def record_expense_in_sheets(worksheet, expense_data: dict) -> bool:
+    """Registra a despesa na planilha Google Sheets."""
+    try:
+        # Adiciona a categoria ao dicionário antes de gravar
+        expense_data["categoria"] = classify_category(expense_data["descricao"])
+
+        # Define a ordem das colunas conforme sua planilha
+        # IMPORTANTE: Ajuste esta ordem para corresponder às colunas da sua planilha!
+        row_to_insert = [
+            expense_data["data"],
+            expense_data["responsavel"],
+            expense_data["categoria"],
+            expense_data["descricao"],
+            expense_data["valor"],
+            # Adicione mais campos se necessário (ex: timestamp de registro)
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Timestamp Registro
+        ]
+        worksheet.append_row(row_to_insert, value_input_option="USER_ENTERED")
+        logger.info(f"Despesa registrada com sucesso no Google Sheets: {expense_data}")
+        return True
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Erro na API do Google Sheets ao tentar registrar despesa: {e} - Dados: {expense_data}")
+        return False
+    except Exception as e:
+        logger.error(f"Erro inesperado ao registrar despesa no Google Sheets: {e} - Dados: {expense_data}", exc_info=True)
         return False
 
-def processar_audio(file_id):
+
+# --- Handlers do Telegram ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Envia uma mensagem de boas-vindas quando o comando /start é emitido."""
+    user = update.effective_user
+    logger.info(f"Usuário {user.username or user.id} iniciou o bot.")
+    await update.message.reply_html(
+        f"Olá, {user.mention_html()}!\n\n"
+        "Eu sou seu assistente financeiro. Para registrar uma despesa, envie uma mensagem de texto ou áudio no formato:\n\n"
+        "<code>Responsável, [Data (DD/MM/YYYY ou 'hoje')], Descrição, Valor</code>\n\n"
+        "<b>Exemplos:</b>\n"
+        "<code>Maria, hoje, Almoço executivo, 35.50</code>\n"
+        "<code>João, 25/12/2024, Presente de Natal, 120</code>\n"
+        "<code>Ana, Supermercado da semana, 250.75</code> (Data será 'hoje')\n\n"
+        "Enviarei uma confirmação após registrar na planilha!"
+    )
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Processa mensagens de texto para registro de despesas."""
+    message_text = update.message.text
+    chat_id = update.message.chat_id
+    user = update.effective_user
+    logger.info(f"Mensagem de texto recebida de {user.username or user.id}: '{message_text}'")
+
+    expense_data = parse_expense_message(message_text)
+
+    if not expense_data:
+        logger.warning(f"Falha no parsing da mensagem de {user.username or user.id}: '{message_text}'")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="😕 Formato inválido. Use:\n"
+                 "<code>Responsável, [Data (DD/MM/YYYY ou 'hoje')], Descrição, Valor</code>\n\n"
+                 "<b>Exemplos:</b>\n"
+                 "<code>Maria, hoje, Almoço executivo, 35.50</code>\n"
+                 "<code>João, 25/12/2024, Presente de Natal, 120</code>\n"
+                 "<code>Ana, Supermercado da semana, 250.75</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Tenta autenticar e obter a planilha a cada tentativa de registro
+    # Isso garante que a conexão esteja ativa, mas pode adicionar latência.
+    # Alternativa: manter o objeto 'worksheet' global ou em context.bot_data
+    # e re-autenticar apenas se ocorrer um erro de API.
+    worksheet = authenticate_google_sheets()
+    if not worksheet:
+        logger.error("Falha ao autenticar/obter planilha do Google Sheets.")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Erro ao conectar com a planilha Google Sheets. Tente novamente mais tarde ou verifique as configurações."
+        )
+        return
+
+    # Tenta registrar na planilha
+    success = record_expense_in_sheets(worksheet, expense_data)
+
+    if success:
+        # Registro bem-sucedido, envia confirmação
+        logger.info(f"Enviando confirmação para {user.username or user.id} para despesa: {expense_data}")
+        confirmation_message = (
+            f"✅ <b>Despesa registrada!</b>\n\n"
+            f"📅 <b>Data:</b> {expense_data['data']}\n"
+            f"📂 <b>Categoria:</b> {expense_data['categoria']}\n" # Categoria adicionada na função de registro
+            f"📝 <b>Descrição:</b> {expense_data['descricao']}\n"
+            f"👤 <b>Responsável:</b> {expense_data['responsavel']}\n"
+            f"💰 <b>Valor:</b> R$ {expense_data['valor']:.2f}".replace('.',',') # Formata para duas casas decimais
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=confirmation_message,
+            parse_mode=ParseMode.HTML
+        )
+        # TODO: Implementar envio de confirmação por áudio (TTS - Text-to-Speech)
+        # Exemplo usando uma biblioteca como gTTS ou uma API de nuvem:
+        # try:
+        #     tts = gTTS(text=f"Despesa registrada: {expense_data['descricao']}, valor {expense_data['valor']:.2f} reais", lang='pt-br')
+        #     tts.save("confirmacao.mp3")
+        #     await context.bot.send_voice(chat_id=chat_id, voice=open("confirmacao.mp3", "rb"))
+        #     os.remove("confirmacao.mp3")
+        #     logger.info("Confirmação por áudio enviada.")
+        # except Exception as e:
+        #     logger.error(f"Erro ao gerar/enviar áudio de confirmação: {e}")
+    else:
+        # Falha ao registrar na planilha
+        logger.error(f"Falha ao registrar despesa no Google Sheets para {user.username or user.id}. Dados: {expense_data}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Erro ao registrar a despesa na planilha Google Sheets. Tente novamente mais tarde."
+        )
+
+
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Processa mensagens de voz para registro de despesas."""
+    chat_id = update.message.chat_id
+    user = update.effective_user
+    voice: Voice = update.message.voice
+    logger.info(f"Mensagem de voz recebida de {user.username or user.id}. Duração: {voice.duration}s")
+
     try:
-        file = bot.get_file(file_id)
-        ogg_path = os.path.join(STATIC_DIR, f"audio_{file_id}.ogg")
-        wav_path = ogg_path.replace(".ogg", ".wav")
-        file.download(ogg_path)
-        # Converter utilizando ffmpeg (se disponível) ou pydub como fallback
-        sucesso = convert_to_wav(ogg_path, wav_path)
-        if not sucesso:
-            AudioSegment.from_file(ogg_path).export(wav_path, format="wav")
-        model = whisper.load_model("tiny")
-        result = model.transcribe(wav_path, language="pt")
-        texto = result["text"].strip()
-        logger.info(f"Transcrição: {texto}")
-        os.remove(ogg_path)
-        os.remove(wav_path)
-        return texto
-    except Exception as e:
-        logger.error(f"Erro ao processar áudio: {e}")
-        logger.error(traceback.format_exc())
-        return None
+        voice_file = await voice.get_file()
+        file_path = f"{voice.file_id}.ogg" # Nome temporário para o arquivo
+        await voice_file.download_to_drive(file_path)
+        logger.info(f"Áudio baixado para: {file_path}")
 
-def gerar_grafico(tipo, titulo, dados, categorias=None):
-    plt.figure(figsize=(10, 6))
-    plt.title(titulo)
-    plt.rcParams.update({'font.size': 14})
-    if tipo == 'barra':
-        plt.bar(categorias, dados)
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-    elif tipo == 'pizza':
-        if categorias and len(categorias) > 6:
-            top_indices = np.argsort(dados)[-5:]
-            top_categorias = [categorias[i] for i in top_indices]
-            top_dados = [dados[i] for i in top_indices]
-            outros_valor = sum(d for i, d in enumerate(dados) if i not in top_indices)
-            top_categorias.append('Outros')
-            top_dados.append(outros_valor)
-            categorias = top_categorias
-            dados = top_dados
-        plt.pie(dados, labels=categorias, autopct='%1.1f%%', startangle=90, shadow=True)
-        plt.axis('equal')
-    elif tipo == 'linha':
-        plt.plot(categorias, dados, marker='o', linestyle='-')
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        
-    nome_arquivo = f"grafico_{uuid.uuid4().hex}.png"
-    caminho_arquivo = os.path.join(STATIC_DIR, nome_arquivo)
-    plt.savefig(caminho_arquivo, dpi=100, bbox_inches='tight')
-    plt.close()
-    return caminho_arquivo
+        # --- Ponto de Integração para Transcrição de Áudio ---
+        transcribed_text = ""
+        # TODO: Implementar a lógica de transcrição de áudio aqui.
+        #      Use bibliotecas como SpeechRecognition (com engines como Sphinx, Google Cloud Speech, etc.)
+        #      ou APIs de serviços de nuvem (AWS Transcribe, Azure Speech to Text).
+        # Exemplo conceitual (substitua pela sua implementação real):
+        # try:
+        #     import speech_recognition as sr
+        #     r = sr.Recognizer()
+        #     with sr.AudioFile(file_path) as source:
+        #         audio_data = r.record(source)
+        #         # Substitua 'recognize_google' pela API/engine desejada e configure credenciais/chaves se necessário
+        #         transcribed_text = r.recognize_google(audio_data, language='pt-BR')
+        #         logger.info(f"Texto transcrito: '{transcribed_text}'")
+        # except ImportError:
+        #      logger.error("Biblioteca 'SpeechRecognition' não instalada. Transcrição de áudio pulada.")
+        #      await context.bot.send_message(chat_id=chat_id, text="⚠️ A função de transcrição de áudio não está configurada neste bot.")
+        #      return # Ou defina transcribed_text = "ERRO_TRANSCRICAO" para tratar abaixo
+        # except sr.UnknownValueError:
+        #     logger.warning("Não foi possível entender o áudio.")
+        #     await context.bot.send_message(chat_id=chat_id, text="😕 Não consegui entender o áudio. Tente falar mais claramente.")
+        #     return
+        # except sr.RequestError as e:
+        #     logger.error(f"Erro no serviço de reconhecimento de fala; {e}")
+        #     await context.bot.send_message(chat_id=chat_id, text="⚠️ O serviço de reconhecimento de fala está indisponível no momento.")
+        #     return
+        # except Exception as e:
+        #      logger.error(f"Erro inesperado na transcrição: {e}", exc_info=True)
+        #      await context.bot.send_message(chat_id=chat_id, text="❌ Ocorreu um erro ao processar seu áudio.")
+        #      return
 
-# ========== FUNÇÕES DE RESUMO ==========
-def gerar_resumo_geral(chat_id):
-    try:
-        registros = sheet.get_all_records()
-        total = 0.0
-        categorias = {}
-        for r in registros:
-            valor = parse_valor(r.get("Valor", "0"))
-            total += valor
-            cat = r.get("Categoria", "OUTROS")
-            categorias[cat] = categorias.get(cat, 0) + valor
-        resumo = f"📊 Resumo Geral:\n\nTotal registrado: {formatar_valor(total)}"
-        labels = list(categorias.keys())
-        valores = list(categorias.values())
-        grafico_path = gerar_grafico('pizza', 'Distribuição de Despesas', valores, labels)
-        bot.send_message(chat_id=chat_id, text=resumo)
-        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
-    except Exception as e:
-        logger.error(f"Erro no resumo geral: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo geral.")
 
-def gerar_resumo_hoje(chat_id):
-    try:
-        hoje = datetime.now().strftime("%d/%m/%Y")
-        registros = sheet.get_all_records()
-        total = 0.0
-        categorias = {}
-        for r in registros:
-            if r.get("Data") == hoje:
-                v = parse_valor(r.get("Valor", "0"))
-                total += v
-                cat = r.get("Categoria", "OUTROS")
-                categorias[cat] = categorias.get(cat, 0) + v
-        resumo = f"📅 Resumo de Hoje ({hoje}):\n\nTotal registrado: {formatar_valor(total)}"
-        if categorias:
-            labels = list(categorias.keys())
-            valores = list(categorias.values())
-            grafico_path = gerar_grafico('pizza', f'Despesas de Hoje ({hoje})', valores, labels)
-            bot.send_message(chat_id=chat_id, text=resumo)
-            bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
-        else:
-            bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas para hoje.")
-    except Exception as e:
-        logger.error(f"Erro no resumo de hoje: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo de hoje.")
+        # --- Simulação de Transcrição (REMOVER EM PRODUÇÃO) ---
+        # Esta linha é apenas para teste. Remova-a quando integrar a transcrição real.
+        # Assuma que a transcrição ocorreu e coloque o texto aqui para testar o fluxo
+        # transcribed_text = "Larissa, hoje, supermercado, 150" # Exemplo
+        # logger.warning("Usando texto de simulação para áudio. Implementar transcrição real.")
+        # --------------------------------------------------------
 
-def gerar_resumo_categoria(chat_id):
-    try:
-        registros = sheet.get_all_records()
-        categorias = {}
-        total = 0.0
-        for r in registros:
-            v = parse_valor(r.get("Valor", "0"))
-            cat = r.get("Categoria", "OUTROS")
-            categorias[cat] = categorias.get(cat, 0) + v
-            total += v
-        resumo = "📂 Resumo por Categoria:\n\n"
-        for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
-            percentual = (val / total) * 100 if total > 0 else 0
-            resumo += f"{cat}: {formatar_valor(val)} ({percentual:.1f}%)\n"
-        resumo += f"\nTotal Geral: {formatar_valor(total)}"
-        labels = list(categorias.keys())
-        valores = list(categorias.values())
-        grafico_path = gerar_grafico('pizza', 'Despesas por Categoria', valores, labels)
-        bot.send_message(chat_id=chat_id, text=resumo)
-        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
-    except Exception as e:
-        logger.error(f"Erro no resumo por categoria: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo por categoria.")
+        if not transcribed_text:
+             logger.warning("Transcrição de áudio falhou ou não foi implementada.")
+             # Envie uma mensagem se a transcrição não foi implementada ou falhou
+             await context.bot.send_message(chat_id=chat_id, text="⚠️ A transcrição de áudio ainda não foi implementada ou falhou.")
+             # Limpa o arquivo baixado
+             if os.path.exists(file_path):
+                 os.remove(file_path)
+             return
 
-def gerar_resumo_mensal(chat_id):
-    try:
-        registros = sheet.get_all_records()
-        hoje = datetime.now()
-        dias = {}
-        for r in registros:
-            data_str = r.get("Data", "")
-            if not data_str:
-                continue
-            try:
-                data = datetime.strptime(data_str, "%d/%m/%Y")
-            except:
-                continue
-            if data.month == hoje.month and data.year == hoje.year:
-                dia = data.day
-                v = parse_valor(r.get("Valor", "0"))
-                dias[dia] = dias.get(dia, 0) + v
-        labels = [f"{dia}/{hoje.month}" for dia in sorted(dias)]
-        valores = [dias[dia] for dia in sorted(dias)]
-        total = sum(valores)
-        resumo = f"📅 Resumo do mês de {hoje.strftime('%B/%Y')}:\n\nTotal: {formatar_valor(total)}\nDias com despesas: {len(dias)}"
-        if dias:
-            dia_maior = max(dias, key=dias.get)
-            resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
-        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime("%B/%Y")}', valores, labels)
-        bot.send_message(chat_id=chat_id, text=resumo)
-        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
-    except Exception as e:
-        logger.error(f"Erro no resumo mensal: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo mensal.")
+        # Processa o texto transcrito da mesma forma que a mensagem de texto
+        expense_data = parse_expense_message(transcribed_text)
 
-def gerar_resumo(chat_id, responsavel, dias, titulo):
-    try:
-        registros = sheet.get_all_records()
-        limite = datetime.now() - timedelta(days=dias)
-        total = 0.0
-        categorias = {}
-        registros_cont = 0
-        for r in registros:
-            data_str = r.get("Data", "")
-            if not data_str:
-                continue
-            try:
-                try:
-                    data = datetime.strptime(data_str, "%d/%m/%Y")
-                except ValueError:
-                    data = datetime.strptime(data_str, "%Y-%m-%d")
-            except Exception as err:
-                logger.warning(f"Data inválida: {data_str} | Erro: {err}")
-                continue
-            resp = r.get("Responsável", "").upper()
-            if data >= limite and (responsavel.upper() == "TODOS" or resp == responsavel.upper()):
-                v = parse_valor(r.get("Valor", "0"))
-                total += v
-                cat = r.get("Categoria", "OUTROS")
-                categorias[cat] = categorias.get(cat, 0) + v
-                registros_cont += 1
-        resumo = f"📋 {titulo} ({responsavel.title()}):\n\nTotal: {formatar_valor(total)}\nRegistros: {registros_cont}"
-        if categorias:
-            labels = list(categorias.keys())
-            valores = list(categorias.values())
-            grafico_path = gerar_grafico('pizza', f'{titulo} - {responsavel.title()}', valores, labels)
-            bot.send_message(chat_id=chat_id, text=resumo)
-            bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
-        else:
-            bot.send_message(chat_id=chat_id, text=resumo)
-    except Exception as e:
-        logger.error(f"Erro ao gerar {titulo}: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text=f"❌ Erro ao gerar {titulo.lower()}.")
-
-# ========== ROTA TELEGRAM ==========
-@app.route(f"/{telegram_token}", methods=["POST"])
-def receber_telegram():
-    try:
-        data = request.json
-        logger.info("Recebido POST do Telegram: " + str(data))
-        if "message" not in data:
-            return "ok"
-        mensagem = data["message"]
-        chat_id = mensagem["chat"]["id"]
-        texto = mensagem.get("text", "")
-        file_id = None
-
-        # Processa mensagens de áudio/voz
-        if "voice" in mensagem:
-            file_id = mensagem["voice"]["file_id"]
-        elif "audio" in mensagem:
-            file_id = mensagem["audio"]["file_id"]
-        if file_id:
-            processamento = processar_audio(file_id)
-            if processamento:
-                texto = processamento
-            else:
-                bot.send_message(chat_id=chat_id, text="❌ Não foi possível processar o áudio.")
-                return "ok"
-
-        texto_lower = texto.lower()
-
-        # Comando de ajuda
-        if "ajuda" in texto_lower:
-            ajuda_msg = (
-                "🤖 Assistente Financeiro - Comandos disponíveis:\n\n"
-                "📌 Registrar despesa:\n"
-                "Formato: <Responsável>, <Data>, <Descrição>, <Valor>\n"
-                "Exemplo: Larissa, hoje, supermercado, 150\n\n"
-                "📊 Ver resumos:\n"
-                "  - resumo geral\n"
-                "  - resumo hoje\n"
-                "  - resumo do mês\n"
-                "  - resumo da semana\n"
-                "  - resumo por categoria\n"
-                "  - resumo da Larissa\n"
-                "  - resumo do Thiago\n\n"
-                "🔉 Também aceitamos mensagens de áudio!"
+        if not expense_data:
+            logger.warning(f"Falha no parsing do texto transcrito de {user.username or user.id}: '{transcribed_text}'")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="😕 Não entendi o formato no áudio. Diga algo como:\n"
+                     "<code>Responsável, [Data], Descrição, Valor</code>\n\n"
+                     "<b>Exemplo:</b>\n"
+                     "<i>'Maria, hoje, Almoço, 35 e 50'</i>",
+                parse_mode=ParseMode.HTML
             )
-            bot.send_message(chat_id=chat_id, text=ajuda_msg, parse_mode="Markdown")
-            return "ok"
+            return
 
-        # Comandos de resumo ou registro
-        if "resumo geral" in texto_lower:
-            gerar_resumo_geral(chat_id)
-        elif "resumo hoje" in texto_lower:
-            gerar_resumo_hoje(chat_id)
-        elif "resumo por categoria" in texto_lower:
-            gerar_resumo_categoria(chat_id)
-        elif "resumo do mês" in texto_lower:
-            gerar_resumo_mensal(chat_id)
-        elif "resumo da semana" in texto_lower:
-            gerar_resumo(chat_id, "TODOS", 7, "Resumo da Semana")
-        elif "resumo da larissa" in texto_lower:
-            gerar_resumo(chat_id, "LARISSA", 30, "Resumo do Mês")
-        elif "resumo do thiago" in texto_lower:
-            gerar_resumo(chat_id, "THIAGO", 30, "Resumo do Mês")
-        # Registro de despesa
-        elif "," in texto:
-            partes = [p.strip() for p in texto.split(",")]
-            # Espera-se 4 partes: Responsável, Data, Descrição, Valor
-            if len(partes) != 4:
-                bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie: Responsável, Data, Descrição, Valor")
-                return "ok"
-            responsavel, data, descricao, valor = partes
-            if data.lower() == "hoje":
-                data_formatada = datetime.today().strftime("%d/%m/%Y")
-            else:
-                try:
-                    data_formatada = datetime.strptime(data, "%d/%m").replace(year=datetime.today().year).strftime("%d/%m/%Y")
-                except:
-                    data_formatada = datetime.today().strftime("%d/%m/%Y")
-            categoria = classificar_categoria(descricao)
-            descricao = descricao.upper()
-            responsavel = responsavel.upper()
-            valor_float = parse_valor(valor)
-            valor_formatado = formatar_valor(valor_float)
-            try:
-                sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
-                resposta = (
-                    f"✅ Despesa registrada!\n"
-                    f"📅 Data: {data_formatada}\n"
-                    f"📂 Categoria: {categoria}\n"
-                    f"📝 Descrição: {descricao}\n"
-                    f"👤 Responsável: {responsavel}\n"
-                    f"💰 Valor: {valor_formatado}"
-                )
-                bot.send_message(chat_id=chat_id, text=resposta)
-                audio_path = gerar_audio(resposta)
-                if audio_path:
-                    bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'))
-            except Exception as e:
-                logger.error(f"Erro ao registrar despesa: {e}")
-                logger.error(traceback.format_exc())
-                bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
+        # Tenta autenticar e obter a planilha
+        worksheet = authenticate_google_sheets()
+        if not worksheet:
+            logger.error("Falha ao autenticar/obter planilha do Google Sheets (áudio).")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ Erro ao conectar com a planilha Google Sheets. Tente novamente mais tarde."
+            )
+            return
+
+        # Tenta registrar na planilha
+        success = record_expense_in_sheets(worksheet, expense_data)
+
+        if success:
+            logger.info(f"Enviando confirmação (áudio) para {user.username or user.id} para despesa: {expense_data}")
+            confirmation_message = (
+                f"✅ <b>Despesa registrada (via áudio)!</b>\n\n"
+                f"📅 <b>Data:</b> {expense_data['data']}\n"
+                f"📂 <b>Categoria:</b> {expense_data['categoria']}\n"
+                f"📝 <b>Descrição:</b> {expense_data['descricao']}\n"
+                f"👤 <b>Responsável:</b> {expense_data['responsavel']}\n"
+                f"💰 <b>Valor:</b> R$ {expense_data['valor']:.2f}".replace('.',',')
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=confirmation_message,
+                parse_mode=ParseMode.HTML
+            )
+            # TODO: Implementar envio de confirmação por áudio (TTS) aqui também, se desejado.
         else:
-            bot.send_message(chat_id=chat_id, text="Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
+            logger.error(f"Falha ao registrar despesa (áudio) no Google Sheets para {user.username or user.id}. Dados: {expense_data}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Erro ao registrar a despesa do áudio na planilha Google Sheets. Tente novamente mais tarde."
+            )
+
     except Exception as e:
-        logger.error(f"Erro ao processar mensagem: {e}")
-        logger.error(traceback.format_exc())
-    return "ok"
+        logger.error(f"Erro ao processar mensagem de voz de {user.username or user.id}: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Ocorreu um erro inesperado ao processar sua mensagem de voz."
+        )
+    finally:
+        # Garante que o arquivo de áudio temporário seja removido
+        if 'file_path' in locals() and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Arquivo de áudio temporário removido: {file_path}")
+            except OSError as e:
+                logger.error(f"Erro ao remover arquivo de áudio temporário {file_path}: {e}")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Loga os erros causados por Updates."""
+    logger.error(f"Exceção ao processar um update: {context.error}", exc_info=context.error)
+    # Opcionalmente, notificar o desenvolvedor ou um chat de admin sobre erros críticos
+    # if isinstance(context.error, telegram.error.NetworkError):
+    #     # handle network error
+
+
+# --- Função Principal ---
+
+def main() -> None:
+    """Inicia o bot."""
+    # Validações Iniciais Essenciais
+    if TELEGRAM_BOT_TOKEN == "SEU_TOKEN_AQUI":
+        logger.critical("Token do Telegram não configurado! Defina a variável de ambiente TELEGRAM_BOT_TOKEN.")
+        return
+    if not os.path.exists(GOOGLE_SHEETS_CREDENTIALS_PATH):
+         logger.critical(f"Arquivo de credenciais do Google Sheets não encontrado em: {GOOGLE_SHEETS_CREDENTIALS_PATH}. Defina GOOGLE_SHEETS_CREDENTIALS_PATH.")
+         return
+    if GOOGLE_SHEETS_ID == "SEU_ID_DA_PLANILHA_AQUI":
+         logger.critical("ID da Planilha Google não configurado! Defina a variável de ambiente GOOGLE_SHEETS_ID.")
+         return
+
+    logger.info("Iniciando o bot...")
+
+    # Cria a Application e passa o token do bot.
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Registra os handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
+
+    # Registra o handler de erro (importante!)
+    application.add_error_handler(error_handler)
+
+    # Inicia o Bot (Polling)
+    logger.info("Bot iniciado e aguardando mensagens...")
+    application.run_polling()
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    main()
