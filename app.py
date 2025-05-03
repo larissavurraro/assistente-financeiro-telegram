@@ -10,9 +10,23 @@ logger = logging.getLogger()
 
 @app.route(f"/{telegram_token}", methods=["POST"])
 def webhook():
-    # Adicione este log
+    data = request.json
     logger.info("Webhook ativado, dados recebidos!")
-    logger.info("Conteúdo recebido: " + str(request.json))  # Log detalhado
+    logger.info("Conteúdo recebido: " + str(data))
+
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        texto_recebido = data["message"]["text"]
+
+        logger.info(f"Chat ID: {chat_id}, Texto recebido: {texto_recebido}")
+        
+        try:
+            resposta = "Mensagem recebida com sucesso no servidor! 💬"
+            bot.send_message(chat_id=chat_id, text=resposta)
+            logger.info(f"Mensagem enviada para o chat ID {chat_id}: {resposta}")
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem: {e}")
+    
     return "ok"
 
 
