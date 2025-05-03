@@ -44,8 +44,8 @@ bot = telegram.Bot(token=telegram_token)
 
 # Lista de contatos para lembretes
 contatos = [
-    {"nome": "Larissa", "chat_id": int(os.environ.get("LARISSA_CHAT_ID", "0"))},
-    {"nome": "Thiago", "chat_id": int(os.environ.get("THIAGO_CHAT_ID", "0"))}
+    {"nome": "Larissa", "chat_id": int(os.environ.get("1823004274", "0"))},
+    {"nome": "Thiago", "chat_id": int(os.environ.get("1823004275", "0"))}
 ]
 
 # Função para enviar lembretes diários
