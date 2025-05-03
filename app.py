@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from flask import Flask, request, Response
+from flask import Flask, request
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
-import os, json, uuid, requests, logging, subprocess
+import os, json, uuid, requests, logging, subprocess, traceback
 from pydub import AudioSegment
 from gtts import gTTS
 import whisper
@@ -16,55 +16,76 @@ import numpy as np
 import telegram
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Inicialização do Flask
+# ========== CONFIGURAÇÃO ==========
 app = Flask(__name__)
 app.secret_key = 'sua_chave_secreta_aqui'
 
-# Diretório para arquivos estáticos
 STATIC_DIR = "static"
 BASE_URL = os.environ.get("BASE_URL", "https://assistente-financeiro.onrender.com")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-# Logger
 logger = logging.getLogger()
 logging.basicConfig(level=logging.INFO)
 
-# Autenticação com Google Sheets
+# ========== GOOGLE SHEETS ==========
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 json_creds = os.environ.get("GOOGLE_CREDS_JSON")
+if not json_creds:
+    raise Exception("Variável de ambiente GOOGLE_CREDS_JSON não definida!")
+
 creds_dict = json.loads(json_creds)
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 gc = gspread.authorize(creds)
-spreadsheet = gc.open_by_key("1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8")
-sheet = spreadsheet.sheet1
 
-# Instância do bot do Telegram
+SHEET_ID = "1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8"
+try:
+    spreadsheet = gc.open_by_key(SHEET_ID)
+    sheet = spreadsheet.sheet1
+    # Teste de escrita
+    try:
+        sheet.append_row(['01/01/2025', 'TESTE', 'TESTE', 'BOT', 'R$0,00'])
+        logger.info("Teste de escrita no Google Sheets OK.")
+    except Exception as e:
+        logger.error(f"Erro no teste de escrita ao Google Sheets: {e}")
+        logger.error(traceback.format_exc())
+except Exception as e:
+    logger.error("Erro na conexão com a planilha.")
+    logger.error(traceback.format_exc())
+    raise
+
+# ========== TELEGRAM ==========
 telegram_token = os.environ.get("TELEGRAM_TOKEN")
+if not telegram_token:
+    raise Exception("Variável de ambiente TELEGRAM_TOKEN não definida!")
 bot = telegram.Bot(token=telegram_token)
 
-# Lista de contatos para lembretes
+# Corrija as variáveis de ambiente para esses nomes (substitua pelos IDs reais)
 contatos = [
-    {"nome": "Larissa", "chat_id": int(os.environ.get("1823004274", "0"))},
-    {"nome": "Thiago", "chat_id": int(os.environ.get("1823004275", "0"))}
+    {"nome": "Larissa", "chat_id": int(os.environ.get("LARISSA_CHAT_ID", 0))},
+    {"nome": "Thiago",  "chat_id": int(os.environ.get("THIAGO_CHAT_ID", 0))}
 ]
 
-# Função para enviar lembretes diários
+# ========== AGENDAMENTO ==========
 def enviar_lembrete():
     for contato in contatos:
         nome = contato["nome"]
         chat_id = contato["chat_id"]
         mensagem = f"🔔 Oi {nome}! Já cadastrou suas despesas de hoje? 💰"
         try:
-            bot.send_message(chat_id=chat_id, text=mensagem)
-            logger.info(f"Lembrete enviado para {nome} ({chat_id})")
+            if chat_id != 0:
+                bot.send_message(chat_id=chat_id, text=mensagem)
+                logger.info(f"Lembrete enviado para {nome} ({chat_id})")
+            else:
+                logger.warning(f"Chat ID do {nome} não configurado!")
         except Exception as e:
             logger.error(f"Erro ao enviar lembrete para {nome}: {e}")
+            logger.error(traceback.format_exc())
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(enviar_lembrete, 'cron', hour=20, minute=0)
 scheduler.start()
 
-# Funções auxiliares de formatação
+# ========== FUNÇÕES AUXILIARES ==========
 def parse_valor(valor_str):
     try:
         return float(str(valor_str).replace("R$", "").replace(".", "").replace(",", ".").strip())
@@ -89,7 +110,6 @@ def classificar_categoria(descricao):
             return categoria.upper()
     return "OUTROS"
 
-# Função para gerar áudio a partir de texto
 def gerar_audio(texto):
     try:
         audio_id = uuid.uuid4().hex
@@ -100,9 +120,9 @@ def gerar_audio(texto):
         return mp3_path
     except Exception as e:
         logger.error(f"Erro ao gerar áudio: {e}")
+        logger.error(traceback.format_exc())
         return None
 
-# Função para converter arquivo para wav utilizando ffmpeg
 def convert_to_wav(input_path, output_path):
     try:
         result = subprocess.run([
@@ -114,9 +134,9 @@ def convert_to_wav(input_path, output_path):
         return True
     except Exception as e:
         logger.error(f"Falha ao executar ffmpeg: {e}")
+        logger.error(traceback.format_exc())
         return False
 
-# Função para processar áudio (voz) enviada ao Telegram
 def processar_audio(file_id):
     try:
         file = bot.get_file(file_id)
@@ -136,9 +156,9 @@ def processar_audio(file_id):
         return texto
     except Exception as e:
         logger.error(f"Erro ao processar áudio: {e}")
+        logger.error(traceback.format_exc())
         return None
 
-# Função para gerar gráficos com matplotlib
 def gerar_grafico(tipo, titulo, dados, categorias=None):
     plt.figure(figsize=(10, 6))
     plt.title(titulo)
@@ -170,7 +190,7 @@ def gerar_grafico(tipo, titulo, dados, categorias=None):
     plt.close()
     return caminho_arquivo
 
-# Funções para gerar resumos
+# ========== FUNÇÕES DE RESUMO ==========
 def gerar_resumo_geral(chat_id):
     try:
         registros = sheet.get_all_records()
@@ -189,6 +209,7 @@ def gerar_resumo_geral(chat_id):
         bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
     except Exception as e:
         logger.error(f"Erro no resumo geral: {e}")
+        logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text="❌ Erro no resumo geral.")
 
 def gerar_resumo_hoje(chat_id):
@@ -214,6 +235,7 @@ def gerar_resumo_hoje(chat_id):
             bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas para hoje.")
     except Exception as e:
         logger.error(f"Erro no resumo de hoje: {e}")
+        logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text="❌ Erro no resumo de hoje.")
 
 def gerar_resumo_categoria(chat_id):
@@ -238,6 +260,7 @@ def gerar_resumo_categoria(chat_id):
         bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
     except Exception as e:
         logger.error(f"Erro no resumo por categoria: {e}")
+        logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text="❌ Erro no resumo por categoria.")
 
 def gerar_resumo_mensal(chat_id):
@@ -264,11 +287,12 @@ def gerar_resumo_mensal(chat_id):
         if dias:
             dia_maior = max(dias, key=dias.get)
             resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
-        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime("%B/%Y")}', valores, labels)
+        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime('%B/%Y')}', valores, labels)
         bot.send_message(chat_id=chat_id, text=resumo)
         bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
     except Exception as e:
         logger.error(f"Erro no resumo mensal: {e}")
+        logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text="❌ Erro no resumo mensal.")
 
 def gerar_resumo(chat_id, responsavel, dias, titulo):
@@ -308,13 +332,15 @@ def gerar_resumo(chat_id, responsavel, dias, titulo):
             bot.send_message(chat_id=chat_id, text=resumo)
     except Exception as e:
         logger.error(f"Erro ao gerar {titulo}: {e}")
+        logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text=f"❌ Erro ao gerar {titulo.lower()}.")
 
-# Rota para receber mensagens do Telegram
+# ========== ROTA TELEGRAM ==========
 @app.route(f"/{telegram_token}", methods=["POST"])
 def receber_telegram():
     try:
         data = request.json
+        logger.info("Recebido POST do Telegram: " + str(data))
         if "message" not in data:
             return "ok"
         mensagem = data["message"]
@@ -392,23 +418,29 @@ def receber_telegram():
             responsavel = responsavel.upper()
             valor_float = parse_valor(valor)
             valor_formatado = formatar_valor(valor_float)
-            sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
-            resposta = (
-                f"✅ Despesa registrada!\n"
-                f"📅 Data: {data_formatada}\n"
-                f"📂 Categoria: {categoria}\n"
-                f"📝 Descrição: {descricao}\n"
-                f"👤 Responsável: {responsavel}\n"
-                f"💰 Valor: {valor_formatado}"
-            )
-            bot.send_message(chat_id=chat_id, text=resposta)
-            audio_path = gerar_audio(resposta)
-            if audio_path:
-                bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'))
+            try:
+                sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
+                resposta = (
+                    f"✅ Despesa registrada!\n"
+                    f"📅 Data: {data_formatada}\n"
+                    f"📂 Categoria: {categoria}\n"
+                    f"📝 Descrição: {descricao}\n"
+                    f"👤 Responsável: {responsavel}\n"
+                    f"💰 Valor: {valor_formatado}"
+                )
+                bot.send_message(chat_id=chat_id, text=resposta)
+                audio_path = gerar_audio(resposta)
+                if audio_path:
+                    bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'))
+            except Exception as e:
+                logger.error(f"Erro ao registrar despesa: {e}")
+                logger.error(traceback.format_exc())
+                bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
         else:
             bot.send_message(chat_id=chat_id, text="Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
+        logger.error(traceback.format_exc())
     return "ok"
 
 if __name__ == "__main__":
