@@ -287,7 +287,7 @@ def gerar_resumo_mensal(chat_id):
         if dias:
             dia_maior = max(dias, key=dias.get)
             resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
-        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime('%B/%Y')}', valores, labels)
+        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime("%B/%Y")}', valores, labels)
         bot.send_message(chat_id=chat_id, text=resumo)
         bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
     except Exception as e:
