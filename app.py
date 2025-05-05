@@ -43,17 +43,6 @@ SHEET_ID = "1vKrmgkMTDwcx5qufF-YRvsXSk99J1Vq9-LwuQINwcl8"
 try:
     spreadsheet = gc.open_by_key(SHEET_ID)
     sheet = spreadsheet.sheet1
-    # Teste de escrita
-    try:
-        sheet.append_row(['01/01/2025', 'TESTE', 'TESTE', 'BOT', 'R$0,00'])
-        logger.info("Teste de escrita no Google Sheets OK.")
-    except Exception as e:
-        logger.error(f"Erro no teste de escrita ao Google Sheets: {e}")
-        logger.error(traceback.format_exc())
-except Exception as e:
-    logger.error("Erro na conexão com a planilha.")
-    logger.error(traceback.format_exc())
-    raise
 
 # ========== TELEGRAM ==========
 telegram_token = os.environ.get("TELEGRAM_TOKEN")
