@@ -356,43 +356,37 @@ def receber_telegram():
             gerar_resumo(chat_id, "THIAGO", 30, "Resumo do Mês")
         # Registro de despesa
         elif "," in texto:
-            partes = [p.strip() for p in texto.split(",")]
-            # Espera-se 4 partes: Responsável, Data, Descrição, Valor
-            if len(partes) != 4:
-                bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie: Responsável, Data, Descrição, Valor")
-                return "ok"
-            responsavel, data, descricao, valor = partes
-            if data.lower() == "hoje":
-                data_formatada = datetime.today().strftime("%d/%m/%Y")
-            else:
-                try:
-                    data_formatada = datetime.strptime(data, "%d/%m").replace(year=datetime.today().year).strftime("%d/%m/%Y")
-                except:
-                    data_formatada = datetime.today().strftime("%d/%m/%Y")
-            categoria = classificar_categoria(descricao)
-            descricao = descricao.upper()
-            responsavel = responsavel.upper()
-            valor_float = parse_valor(valor)
-            valor_formatado = formatar_valor(valor_float)
-            try:
-                sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
-                resposta = (
-                    f"✅ Despesa registrada!\n"
-                    f"📅 Data: {data_formatada}\n"
-                    f"📂 Categoria: {categoria}\n"
-                    f"📝 Descrição: {descricao}\n"
-                    f"👤 Responsável: {responsavel}\n"
-                    f"💰 Valor: {valor_formatado}"
-                )
-                bot.send_message(chat_id=chat_id, text=resposta)
-                audio_path = gerar_audio(resposta)
-                if audio_path:
-                    bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'))
-            except Exception as e:
-                logger.error(f"Erro ao registrar despesa: {e}")
-                logger.error(traceback.format_exc())
-                bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
-        else:
+    partes = [p.strip() for p in texto.split(",")]
+
+    # Ajustado para esperar até 3 partes: Responsável, Descrição, Valor
+    if len(partes) != 3:
+        bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie no formato: Responsável, Descrição, Valor")
+        return "ok"
+
+    responsavel, descricao, valor = partes
+    data_formatada = datetime.today().strftime("%d/%m/%Y")  # Usa a data atual automaticamente
+    categoria = classificar_categoria(descricao)
+    descricao = descricao.upper()
+    responsavel = responsavel.upper()
+    valor_float = parse_valor(valor)
+    valor_formatado = formatar_valor(valor_float)
+
+    try:
+        sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])  # Escreve a linha completa
+        resposta = (
+            f"✅ Despesa registrada!\n"
+            f"📅 Data: {data_formatada}\n"
+            f"📂 Categoria: {categoria}\n"
+            f"📝 Descrição: {descricao}\n"
+            f"👤 Responsável: {responsavel}\n"
+            f"💰 Valor: {valor_formatado}"
+        )
+        bot.send_message(chat_id=chat_id, text=resposta)
+    except Exception as e:
+        logger.error(f"Erro ao registrar despesa: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
+    else:
             bot.send_message(chat_id=chat_id, text="Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
