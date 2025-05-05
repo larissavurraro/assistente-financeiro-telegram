@@ -304,18 +304,7 @@ def receber_telegram():
         texto = mensagem.get("text", "")
         file_id = None
 
-        # Processa mensagens de áudio/voz
-        if "voice" in mensagem:
-            file_id = mensagem["voice"]["file_id"]
-        elif "audio" in mensagem:
-            file_id = mensagem["audio"]["file_id"]
-        if file_id:
-            processamento = processar_audio(file_id)
-            if processamento:
-                texto = processamento
-            else:
-                bot.send_message(chat_id=chat_id, text="❌ Não foi possível processar o áudio.")
-                return "ok"
+        # Processa mensagens de áudio/vo
 
         texto_lower = texto.lower()
 
@@ -324,8 +313,8 @@ def receber_telegram():
             ajuda_msg = (
                 "🤖 Assistente Financeiro - Comandos disponíveis:\n\n"
                 "📌 Registrar despesa:\n"
-                "Formato: <Responsável>, <Data>, <Descrição>, <Valor>\n"
-                "Exemplo: Larissa, hoje, supermercado, 150\n\n"
+                "Formato: <Responsável>, <Descrição>, <Valor>\n"
+                "Exemplo: Larissa, supermercado, 150\n\n"
                 "📊 Ver resumos:\n"
                 "  - resumo geral\n"
                 "  - resumo hoje\n"
@@ -334,7 +323,6 @@ def receber_telegram():
                 "  - resumo por categoria\n"
                 "  - resumo da Larissa\n"
                 "  - resumo do Thiago\n\n"
-                "🔉 Também aceitamos mensagens de áudio!"
             )
             bot.send_message(chat_id=chat_id, text=ajuda_msg, parse_mode="Markdown")
             return "ok"
