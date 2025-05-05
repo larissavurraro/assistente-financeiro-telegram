@@ -1,11 +1,11 @@
 Flask
+python-telegram-bot
+gunicorn
 gspread
-google-auth # Substitui oauth2client
-requests
+oauth2client
 pydub
 gTTS
-openai-whisper # Ou a biblioteca whisper que você está usando
+whisper
 matplotlib
 numpy
-python-telegram-bot # Verifique a versão, este código assume v13+ ou compatível
-APScheduler
+apscheduler
