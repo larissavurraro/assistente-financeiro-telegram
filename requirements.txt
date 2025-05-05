@@ -9,3 +9,4 @@ whisper
 matplotlib
 numpy
 apscheduler
+asyncio
