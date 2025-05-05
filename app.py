@@ -15,6 +15,7 @@ matplotlib.use('Agg')
 import numpy as np
 import telegram
 from apscheduler.schedulers.background import BackgroundScheduler
+from pytz import timezone
 
 # ========== CONFIGURAÇÃO ==========
 app = Flask(__name__)
@@ -66,6 +67,11 @@ contatos = [
 ]
 
 # ========== AGENDAMENTO ==========
+timezone_brasilia = timezone("America/Sao_Paulo")
+
+# Inicializar o Scheduler com o timezone correto
+scheduler = BackgroundScheduler(timezone=timezone_brasilia)
+
 def enviar_lembrete():
     for contato in contatos:
         nome = contato["nome"]
@@ -81,7 +87,6 @@ def enviar_lembrete():
             logger.error(f"Erro ao enviar lembrete para {nome}: {e}")
             logger.error(traceback.format_exc())
 
-scheduler = BackgroundScheduler()
 scheduler.add_job(enviar_lembrete, 'cron', hour=20, minute=0)
 scheduler.start()
 
