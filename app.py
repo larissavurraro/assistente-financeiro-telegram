@@ -167,7 +167,7 @@ def gerar_resumo_hoje(chat_id):
         total = 0.0
         categorias = {}
         for r in registros:
-            data_str = r.get("Data", "").strip()  # AJUSTADO
+            data_str = r.get("Data da Despesa", "").strip()  # AJUSTADO
             if data_str == hoje:
                 v = parse_valor(r.get("Valor", "0"))
                 total += v
@@ -193,7 +193,7 @@ def gerar_resumo_mensal(chat_id):
         hoje = datetime.now()
         dias = {}
         for r in registros:
-            data_str = r.get("Data", "").strip()
+            data_str = r.get("Data da Despesa", "").strip()
             if not data_str:
                 continue
             try:
