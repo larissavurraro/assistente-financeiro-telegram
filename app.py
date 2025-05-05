@@ -16,6 +16,7 @@ import numpy as np
 import telegram
 from apscheduler.schedulers.background import BackgroundScheduler
 from pytz import timezone
+import re
 
 # ========== CONFIGURAÇÃO ==========
 app = Flask(__name__)
@@ -92,8 +93,19 @@ scheduler.start()
 
 # ========== FUNÇÕES AUXILIARES ==========
 def parse_valor(valor_str):
+    """
+    Aceita: '3790', '3.790', '3.790,35', '37,90', '37.90'
+    Interpreta o último separador (ponto ou vírgula) como decimal.
+    """
+    valor_str = str(valor_str).replace("R$", "").replace(" ", "").strip()
+    valor_str = re.sub(r"[^\d\.,]", "", valor_str)
+    if "," in valor_str and "." in valor_str:
+        # '1.234,56' -> vira '1234.56'
+        valor_str = valor_str.replace(".", "").replace(",", ".")
+    elif "," in valor_str:
+        valor_str = valor_str.replace(",", ".")
     try:
-        return float(str(valor_str).replace("R$", "").replace(".", "").replace(",", ".").strip())
+        return float(valor_str)
     except:
         return 0.0
 
@@ -304,8 +316,6 @@ def receber_telegram():
         texto = mensagem.get("text", "")
         file_id = None
 
-        # Processa mensagens de áudio/vo
-
         texto_lower = texto.lower()
 
         # Comando de ajuda
@@ -314,7 +324,7 @@ def receber_telegram():
                 "🤖 Assistente Financeiro - Comandos disponíveis:\n\n"
                 "📌 Registrar despesa:\n"
                 "Formato: <Responsável>, <Descrição>, <Valor>\n"
-                "Exemplo: Larissa, supermercado, 150\n\n"
+                "Exemplo: Larissa, supermercado, 37,90\n\n"
                 "📊 Ver resumos:\n"
                 "  - resumo geral\n"
                 "  - resumo hoje\n"
@@ -327,7 +337,7 @@ def receber_telegram():
             bot.send_message(chat_id=chat_id, text=ajuda_msg, parse_mode="Markdown")
             return "ok"
 
-        # Comandos de resumo ou registro
+        # Comandos de resumo
         if "resumo geral" in texto_lower:
             gerar_resumo_geral(chat_id)
         elif "resumo hoje" in texto_lower:
@@ -342,40 +352,39 @@ def receber_telegram():
             gerar_resumo(chat_id, "LARISSA", 30, "Resumo do Mês")
         elif "resumo do thiago" in texto_lower:
             gerar_resumo(chat_id, "THIAGO", 30, "Resumo do Mês")
-        # Registro de despesa
+        # Cadastro da despesa (AJUSTADO)
         elif "," in texto:
-    partes = [p.strip() for p in texto.split(",")]
+            partes = [p.strip() for p in texto.split(",")]
+            if len(partes) != 3:
+                bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie: Responsável, Descrição, Valor\nExemplo: Larissa, supermercado, 37,90")
+                return "ok"
 
-    # Ajustado para esperar até 3 partes: Responsável, Descrição, Valor
-    if len(partes) != 3:
-        bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie no formato: Responsável, Descrição, Valor")
-        return "ok"
+            responsavel, descricao, valor = partes
+            data_formatada = datetime.today().strftime("%d/%m/%Y")
+            categoria = classificar_categoria(descricao)
+            descricao = descricao.upper()
+            responsavel = responsavel.upper()
+            valor_float = parse_valor(valor)
+            valor_formatado = formatar_valor(valor_float)
 
-    responsavel, descricao, valor = partes
-    data_formatada = datetime.today().strftime("%d/%m/%Y")  # Usa a data atual automaticamente
-    categoria = classificar_categoria(descricao)
-    descricao = descricao.upper()
-    responsavel = responsavel.upper()
-    valor_float = parse_valor(valor)
-    valor_formatado = formatar_valor(valor_float)
-
-    try:
-        sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])  # Escreve a linha completa
-        resposta = (
-            f"✅ Despesa registrada!\n"
-            f"📅 Data: {data_formatada}\n"
-            f"📂 Categoria: {categoria}\n"
-            f"📝 Descrição: {descricao}\n"
-            f"👤 Responsável: {responsavel}\n"
-            f"💰 Valor: {valor_formatado}"
-        )
-        bot.send_message(chat_id=chat_id, text=resposta)
-    except Exception as e:
-        logger.error(f"Erro ao registrar despesa: {e}")
-        logger.error(traceback.format_exc())
-        bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
-    else:
+            try:
+                sheet.append_row([data_formatada, categoria, descricao, responsavel, valor_formatado])
+                resposta = (
+                    f"✅ Despesa registrada!\n"
+                    f"📅 Data: {data_formatada}\n"
+                    f"📂 Categoria: {categoria}\n"
+                    f"📝 Descrição: {descricao}\n"
+                    f"👤 Responsável: {responsavel}\n"
+                    f"💰 Valor: {valor_formatado}"
+                )
+                bot.send_message(chat_id=chat_id, text=resposta)
+            except Exception as e:
+                logger.error(f"Erro ao registrar despesa: {e}")
+                logger.error(traceback.format_exc())
+                bot.send_message(chat_id=chat_id, text="❌ Erro ao registrar a despesa na planilha!")
+        else:
             bot.send_message(chat_id=chat_id, text="Comando não reconhecido. Envie 'ajuda' para ver os comandos disponíveis.")
+
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
