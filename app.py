@@ -193,7 +193,7 @@ def gerar_resumo_mensal(chat_id):
         hoje = datetime.now()
         dias = {}
         for r in registros:
-            data_str = r.get("Data", "").strip()   # AJUSTADO
+            data_str = r.get("Data", "").strip()
             if not data_str:
                 continue
             try:
@@ -211,7 +211,7 @@ def gerar_resumo_mensal(chat_id):
         if dias:
             dia_maior = max(dias, key=dias.get)
             resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
-        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)
+        grafico_path = gerar_grafico('linha', f"Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)  # <--- Corrigido aqui
         bot.send_message(chat_id=chat_id, text=resumo)
         bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
     except Exception as e:
@@ -283,6 +283,7 @@ def gerar_resumo(chat_id, responsavel, dias, titulo):
         logger.error(f"Erro ao gerar {titulo}: {e}")
         logger.error(traceback.format_exc())
         bot.send_message(chat_id=chat_id, text=f"❌ Erro ao gerar {titulo.lower()}.")
+
 # ========== ROTA TELEGRAM ==========
 @app.route(f"/{telegram_token}", methods=["POST"])
 def receber_telegram():
