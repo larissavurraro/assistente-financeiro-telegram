@@ -139,8 +139,150 @@ def gerar_grafico(tipo, titulo, dados, categorias=None):
     return caminho_arquivo
 
 # ========== FUNÇÕES DE RESUMO ==========
-# (Aqui você pode manter as funções de resumo, sem grandes alterações, conforme estão)
+def gerar_resumo_geral(chat_id):
+    try:
+        registros = sheet.get_all_records()
+        total = 0.0
+        categorias = {}
+        for r in registros:
+            valor = parse_valor(r.get("Valor", "0"))
+            total += valor
+            cat = r.get("Categoria", "OUTROS")
+            categorias[cat] = categorias.get(cat, 0) + valor
+        resumo = f"📊 Resumo Geral:\n\nTotal registrado: {formatar_valor(total)}"
+        labels = list(categorias.keys())
+        valores = list(categorias.values())
+        grafico_path = gerar_grafico('pizza', 'Distribuição de Despesas', valores, labels)
+        bot.send_message(chat_id=chat_id, text=resumo)
+        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+    except Exception as e:
+        logger.error(f"Erro no resumo geral: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo geral.")
 
+def gerar_resumo_hoje(chat_id):
+    try:
+        hoje = datetime.now().strftime("%d/%m/%Y")
+        registros = sheet.get_all_records()
+        total = 0.0
+        categorias = {}
+        for r in registros:
+            data_str = r.get("Data", "").strip()  # AJUSTADO
+            if data_str == hoje:
+                v = parse_valor(r.get("Valor", "0"))
+                total += v
+                cat = r.get("Categoria", "OUTROS")
+                categorias[cat] = categorias.get(cat, 0) + v
+        resumo = f"📅 Resumo de Hoje ({hoje}):\n\nTotal registrado: {formatar_valor(total)}"
+        if categorias:
+            labels = list(categorias.keys())
+            valores = list(categorias.values())
+            grafico_path = gerar_grafico('pizza', f'Despesas de Hoje ({hoje})', valores, labels)
+            bot.send_message(chat_id=chat_id, text=resumo)
+            bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+        else:
+            bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas para hoje.")
+    except Exception as e:
+        logger.error(f"Erro no resumo de hoje: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo de hoje.")
+
+def gerar_resumo_mensal(chat_id):
+    try:
+        registros = sheet.get_all_records()
+        hoje = datetime.now()
+        dias = {}
+        for r in registros:
+            data_str = r.get("Data", "").strip()   # AJUSTADO
+            if not data_str:
+                continue
+            try:
+                data = datetime.strptime(data_str, "%d/%m/%Y")
+            except:
+                continue
+            if data.month == hoje.month and data.year == hoje.year:
+                dia = data.day
+                v = parse_valor(r.get("Valor", "0"))
+                dias[dia] = dias.get(dia, 0) + v
+        labels = [f"{dia}/{hoje.month}" for dia in sorted(dias)]
+        valores = [dias[dia] for dia in sorted(dias)]
+        total = sum(valores)
+        resumo = f"📅 Resumo do mês de {hoje.strftime('%B/%Y')}:\n\nTotal: {formatar_valor(total)}\nDias com despesas: {len(dias)}"
+        if dias:
+            dia_maior = max(dias, key=dias.get)
+            resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
+        grafico_path = gerar_grafico('linha', f'Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)
+        bot.send_message(chat_id=chat_id, text=resumo)
+        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+    except Exception as e:
+        logger.error(f"Erro no resumo mensal: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo mensal.")
+
+def gerar_resumo_categoria(chat_id):
+    try:
+        registros = sheet.get_all_records()
+        categorias = {}
+        total = 0.0
+        for r in registros:
+            v = parse_valor(r.get("Valor", "0"))
+            cat = r.get("Categoria", "OUTROS")
+            categorias[cat] = categorias.get(cat, 0) + v
+            total += v
+        resumo = "📂 Resumo por Categoria:\n\n"
+        for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
+            percentual = (val / total) * 100 if total > 0 else 0
+            resumo += f"{cat}: {formatar_valor(val)} ({percentual:.1f}%)\n"
+        resumo += f"\nTotal Geral: {formatar_valor(total)}"
+        labels = list(categorias.keys())
+        valores = list(categorias.values())
+        grafico_path = gerar_grafico('pizza', 'Despesas por Categoria', valores, labels)
+        bot.send_message(chat_id=chat_id, text=resumo)
+        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+    except Exception as e:
+        logger.error(f"Erro no resumo por categoria: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text="❌ Erro no resumo por categoria.")
+
+def gerar_resumo(chat_id, responsavel, dias, titulo):
+    try:
+        registros = sheet.get_all_records()
+        limite = datetime.now() - timedelta(days=dias)
+        total = 0.0
+        categorias = {}
+        registros_cont = 0
+        for r in registros:
+            data_str = r.get("Data", "").strip()  # AJUSTADO
+            if not data_str:
+                continue
+            try:
+                try:
+                    data = datetime.strptime(data_str, "%d/%m/%Y")
+                except ValueError:
+                    data = datetime.strptime(data_str, "%Y-%m-%d")
+            except Exception as err:
+                logger.warning(f"Data inválida: {data_str} | Erro: {err}")
+                continue
+            resp = r.get("Responsável", "").upper()
+            if data >= limite and (responsavel.upper() == "TODOS" or resp == responsavel.upper()):
+                v = parse_valor(r.get("Valor", "0"))
+                total += v
+                cat = r.get("Categoria", "OUTROS")
+                categorias[cat] = categorias.get(cat, 0) + v
+                registros_cont += 1
+        resumo = f"📋 {titulo} ({responsavel.title()}):\n\nTotal: {formatar_valor(total)}\nRegistros: {registros_cont}"
+        if categorias:
+            labels = list(categorias.keys())
+            valores = list(categorias.values())
+            grafico_path = gerar_grafico('pizza', f'{titulo} - {responsavel.title()}', valores, labels)
+            bot.send_message(chat_id=chat_id, text=resumo)
+            bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+        else:
+            bot.send_message(chat_id=chat_id, text=resumo)
+    except Exception as e:
+        logger.error(f"Erro ao gerar {titulo}: {e}")
+        logger.error(traceback.format_exc())
+        bot.send_message(chat_id=chat_id, text=f"❌ Erro ao gerar {titulo.lower()}.")
 # ========== ROTA TELEGRAM ==========
 @app.route(f"/{telegram_token}", methods=["POST"])
 def receber_telegram():
