@@ -8,6 +8,6 @@ apscheduler
 pytz
 python-dateutil
 gunicorn
-python-telegram-bot
+python-telegram-bot>=20.0
 datetime
 re
