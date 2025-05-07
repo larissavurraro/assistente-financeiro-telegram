@@ -5,6 +5,11 @@ from flask import Flask, request
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
+try:
+    from dateutil.relativedelta import relativedelta
+except ImportError:
+    # Sugestão: pip install python-dateutil em seu ambiente
+    relativedelta = None
 import os, json, uuid, logging, traceback
 import numpy as np
 import telegram
@@ -120,6 +125,13 @@ def gerar_grafico(tipo, titulo, dados, categorias=None):
     plt.close()
     return caminho_arquivo
 
+def detalhar_categorias(categorias_dict, total=0.0):
+    texto = ""
+    for cat, val in sorted(categorias_dict.items(), key=lambda x: x[1], reverse=True):
+        percentual = (val / total) * 100 if total > 0 else 0
+        texto += f"{cat}: {formatar_valor(val)} ({percentual:.1f}%)\n"
+    return texto
+
 # ========== FUNÇÕES DE RESUMO ==========
 def gerar_resumo_geral(chat_id):
     try:
@@ -132,6 +144,7 @@ def gerar_resumo_geral(chat_id):
             cat = r.get("Categoria", "OUTROS")
             categorias[cat] = categorias.get(cat, 0) + valor
         resumo = f"📊 Resumo Geral:\n\nTotal registrado: {formatar_valor(total)}"
+        resumo += "\n\n" + detalhar_categorias(categorias, total)
         labels = list(categorias.keys())
         valores = list(categorias.values())
         grafico_path = gerar_grafico('pizza', 'Distribuição de Despesas', valores, labels)
@@ -144,12 +157,12 @@ def gerar_resumo_geral(chat_id):
 
 def gerar_resumo_hoje(chat_id):
     try:
-        hoje = datetime.now().strftime("%d/%m/%Y")
+        hoje = datetime.now(timezone_brasilia).strftime("%d/%m/%Y")
         registros = sheet.get_all_records()
         total = 0.0
         categorias = {}
         for r in registros:
-            data_str = r.get("Data da Despesa", "").strip()  # AJUSTADO
+            data_str = r.get("Data da Despesa", "").strip()
             if data_str == hoje:
                 v = parse_valor(r.get("Valor", "0"))
                 total += v
@@ -157,13 +170,15 @@ def gerar_resumo_hoje(chat_id):
                 categorias[cat] = categorias.get(cat, 0) + v
         resumo = f"📅 Resumo de Hoje ({hoje}):\n\nTotal registrado: {formatar_valor(total)}"
         if categorias:
+            resumo += "\n\n" + detalhar_categorias(categorias, total)
             labels = list(categorias.keys())
             valores = list(categorias.values())
             grafico_path = gerar_grafico('pizza', f'Despesas de Hoje ({hoje})', valores, labels)
             bot.send_message(chat_id=chat_id, text=resumo)
             bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
         else:
-            bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas para hoje.")
+            resumo += "\n\nNão há despesas registradas para hoje."
+            bot.send_message(chat_id=chat_id, text=resumo)
     except Exception as e:
         logger.error(f"Erro no resumo de hoje: {e}")
         logger.error(traceback.format_exc())
@@ -172,8 +187,9 @@ def gerar_resumo_hoje(chat_id):
 def gerar_resumo_mensal(chat_id):
     try:
         registros = sheet.get_all_records()
-        hoje = datetime.now()
+        hoje = datetime.now(timezone_brasilia)
         dias = {}
+        categorias = {}
         for r in registros:
             data_str = r.get("Data da Despesa", "").strip()
             if not data_str:
@@ -186,6 +202,8 @@ def gerar_resumo_mensal(chat_id):
                 dia = data.day
                 v = parse_valor(r.get("Valor", "0"))
                 dias[dia] = dias.get(dia, 0) + v
+                cat = r.get("Categoria", "OUTROS")
+                categorias[cat] = categorias.get(cat, 0) + v
         labels = [f"{dia}/{hoje.month}" for dia in sorted(dias)]
         valores = [dias[dia] for dia in sorted(dias)]
         total = sum(valores)
@@ -193,9 +211,13 @@ def gerar_resumo_mensal(chat_id):
         if dias:
             dia_maior = max(dias, key=dias.get)
             resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
-        grafico_path = gerar_grafico('linha', f"Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)  # <--- Corrigido aqui
-        bot.send_message(chat_id=chat_id, text=resumo)
-        bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+        if categorias:
+            resumo += "\n\n" + detalhar_categorias(categorias, total)
+            grafico_path = gerar_grafico('linha', f"Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)
+            bot.send_message(chat_id=chat_id, text=resumo)
+            bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
+        else:
+            bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas este mês.")
     except Exception as e:
         logger.error(f"Erro no resumo mensal: {e}")
         logger.error(traceback.format_exc())
@@ -212,9 +234,7 @@ def gerar_resumo_categoria(chat_id):
             categorias[cat] = categorias.get(cat, 0) + v
             total += v
         resumo = "📂 Resumo por Categoria:\n\n"
-        for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
-            percentual = (val / total) * 100 if total > 0 else 0
-            resumo += f"{cat}: {formatar_valor(val)} ({percentual:.1f}%)\n"
+        resumo += detalhar_categorias(categorias, total)
         resumo += f"\nTotal Geral: {formatar_valor(total)}"
         labels = list(categorias.keys())
         valores = list(categorias.values())
@@ -229,12 +249,12 @@ def gerar_resumo_categoria(chat_id):
 def gerar_resumo(chat_id, responsavel, dias, titulo):
     try:
         registros = sheet.get_all_records()
-        limite = datetime.now() - timedelta(days=dias)
+        limite = datetime.now(timezone_brasilia) - timedelta(days=dias)
         total = 0.0
         categorias = {}
         registros_cont = 0
         for r in registros:
-            data_str = r.get("Data", "").strip()  # AJUSTADO
+            data_str = r.get("Data da Despesa", "").strip()
             if not data_str:
                 continue
             try:
@@ -254,13 +274,14 @@ def gerar_resumo(chat_id, responsavel, dias, titulo):
                 registros_cont += 1
         resumo = f"📋 {titulo} ({responsavel.title()}):\n\nTotal: {formatar_valor(total)}\nRegistros: {registros_cont}"
         if categorias:
+            resumo += "\n\n" + detalhar_categorias(categorias, total)
             labels = list(categorias.keys())
             valores = list(categorias.values())
             grafico_path = gerar_grafico('pizza', f'{titulo} - {responsavel.title()}', valores, labels)
             bot.send_message(chat_id=chat_id, text=resumo)
             bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
         else:
-            bot.send_message(chat_id=chat_id, text=resumo)
+            bot.send_message(chat_id=chat_id, text=resumo + "\n\nNão há despesas registradas nesse período/para esse responsável.")
     except Exception as e:
         logger.error(f"Erro ao gerar {titulo}: {e}")
         logger.error(traceback.format_exc())
@@ -285,7 +306,7 @@ def receber_telegram():
                 "🤖 *Assistente Financeiro - Comandos disponíveis:*\n\n"
                 "📌 Registrar despesa:\n"
                 "_Formato:_ <Responsável>, <Descrição>, <Valor>\n"
-                "_Exemplo:_ Larissa, supermercado, 37,90\n\n"
+                "_Exemplo:_ Larissa, supermercado, 37,90 ou Larissa, mercado, 30, 3x\n\n"
                 "📊 *Ver resumos:*\n"
                 "- resumo geral\n- resumo hoje\n- resumo do mês\n- resumo da semana\n- resumo por categoria\n- resumo da Larissa\n- resumo do Thiago\n"
             )
@@ -307,27 +328,53 @@ def receber_telegram():
             gerar_resumo(chat_id, "LARISSA", 30, "Resumo do Mês")
         elif "resumo do thiago" in texto_lower:
             gerar_resumo(chat_id, "THIAGO", 30, "Resumo do Mês")
-        # Cadastro da despesa
+        # Cadastro da despesa (AGORA SUPORTA PARCELAMENTO)
         elif "," in texto:
             partes = [p.strip() for p in texto.split(",")]
-            if len(partes) != 3:
-                bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie: Responsável, Descrição, Valor\nExemplo: Larissa, supermercado, 37,90")
+
+            # Permitir 3 ou 4 partes (parcelado na 4a parte: "3x", "2x", ...)
+            if len(partes) not in (3, 4):
+                bot.send_message(chat_id=chat_id, text="❌ Formato inválido. Envie: Responsável, Descrição, Valor [, Parcelas]\nExemplo: Larissa, supermercado, 37,90 ou Larissa, mercado, 30, 3x")
                 return "ok"
-            responsavel, descricao, valor = partes
-            data_formatada = datetime.now(timezone_brasilia).strftime("%d/%m/%Y")
+            responsavel, descricao, valor = partes[0], partes[1], partes[2]
+            parcelas = 1
+            if len(partes) == 4:
+                m = re.match(r"(\d+)\s*x", partes[3].replace(" ", ""), re.IGNORECASE)
+                if m:
+                    parcelas = int(m.group(1))
+                else:
+                    bot.send_message(chat_id=chat_id, text="❌ Formato de parcelas inválido. Use, por exemplo, 3x para 3 parcelas.")
+                    return "ok"
+
             categoria = classificar_categoria(descricao)
             valor_float = parse_valor(valor)
-            valor_formatado = formatar_valor(valor_float)
+            valor_parcela = round(valor_float / parcelas, 2) if parcelas > 1 else valor_float
+            valor_formatado = formatar_valor(valor_parcela)
+            hoje = datetime.now(timezone_brasilia)
             try:
-                sheet.append_row([data_formatada, categoria, descricao.upper(), responsavel.upper(), valor_formatado])
+                for i in range(parcelas):
+                    # Usando dateutil.relativedelta SE disponível, senão 30 dias
+                    if relativedelta:
+                        data_parcela = hoje + relativedelta(months=i)
+                    else:
+                        data_parcela = hoje + timedelta(days=30 * i)
+                    data_str = data_parcela.strftime("%d/%m/%Y")
+                    descricao_final = descricao.upper()
+                    if parcelas > 1:
+                        descricao_final = f"{descricao.upper()} [{i+1}/{parcelas}]"
+                    # Colunas: Data da Despesa, Categoria, Descrição, Responsável, Valor
+                    sheet.append_row([data_str, categoria, descricao_final, responsavel.upper(), valor_formatado])
                 resposta = (
                     f"✅ Despesa registrada!\n"
-                    f"📅 Data: {data_formatada}\n"
+                    f"📅 Data inicial: {hoje.strftime('%d/%m/%Y')}\n"
                     f"📂 Categoria: {categoria}\n"
                     f"📝 Descrição: {descricao.upper()}\n"
                     f"👤 Responsável: {responsavel.upper()}\n"
-                    f"💰 Valor: {valor_formatado}"
+                    f"💰 Valor total: {formatar_valor(valor_float)}"
                 )
+                if parcelas > 1:
+                    resposta += f"\n🔢 Parcelas: {parcelas} x {formatar_valor(valor_parcela)}"
+
                 bot.send_message(chat_id=chat_id, text=resposta)
             except Exception as e:
                 logger.error(f"Erro ao registrar despesa: {e}")
