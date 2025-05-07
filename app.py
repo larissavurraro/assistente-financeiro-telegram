@@ -59,24 +59,6 @@ contatos = [
 timezone_brasilia = timezone("America/Sao_Paulo")
 scheduler = BackgroundScheduler(timezone=timezone_brasilia)
 
-def enviar_lembrete():
-    for contato in contatos:
-        nome = contato["nome"]
-        chat_id = contato["chat_id"]
-        mensagem = f"🔔 Oi {nome}! Já cadastrou suas despesas de hoje? 💰"
-        try:
-            if chat_id != 0:
-                bot.send_message(chat_id=chat_id, text=mensagem)
-                logger.info(f"Lembrete enviado para {nome} ({chat_id})")
-            else:
-                logger.warning(f"Chat ID do {nome} não configurado!")
-        except Exception as e:
-            logger.error(f"Erro ao enviar lembrete para {nome}: {e}")
-            logger.error(traceback.format_exc())
-
-scheduler.add_job(enviar_lembrete, 'cron', hour=20, minute=0)
-scheduler.start()
-
 # ========== FUNÇÕES AUXILIARES ==========
 def parse_valor(valor_str):
     valor_str = str(valor_str).replace("R$", "").replace(" ", "").strip()
