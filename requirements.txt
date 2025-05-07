@@ -8,3 +8,6 @@ apscheduler
 pytz
 python-dateutil
 gunicorn
+python-telegram-bot
+datetime
+re
