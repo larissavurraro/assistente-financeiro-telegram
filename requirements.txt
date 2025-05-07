@@ -3,11 +3,8 @@ gspread
 oauth2client
 numpy
 matplotlib
-telegram
 apscheduler
 pytz
 python-dateutil
 gunicorn
-python-telegram-bot>=20.0
-datetime
-re
+python-telegram-bot<20.0
