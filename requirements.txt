@@ -1,9 +1,10 @@
+flask
 gspread
 oauth2client
 numpy
 matplotlib
-python-telegram-bot
+telegram
 apscheduler
 pytz
 python-dateutil
-flask
+gunicorn
