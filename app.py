@@ -81,7 +81,7 @@ def formatar_valor(valor):
     return f"R${valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 palavras_categoria = {
-    "ALIMENTAÇÃO": ["mercado", "supermercado", "pão", "leite", "feira", "comida"],
+    "ALIMENTAÇÃO": ["mercado", "alimentação", "pão", "leite", "feira", "comida","almoço","refeição","jantar"],
     "TRANSPORTE": ["uber", "99", "ônibus", "metro", "trem", "corrida", "combustível", "gasolina"],
     "LAZER": ["cinema", "netflix", "bar", "show", "festa", "lazer"],
     "MORADIA": ["aluguel", "condominio", "energia", "água", "internet", "luz"],
