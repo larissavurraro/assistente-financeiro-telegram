@@ -64,6 +64,12 @@ contatos = [
 timezone_brasilia = timezone("America/Sao_Paulo")
 scheduler = BackgroundScheduler(timezone=timezone_brasilia)
 
+# Função para enviar o lembrete diário
+# Adicionar a tarefa de lembrete diário
+scheduler.add_job(enviar_lembrete_diario, 'cron', hour=21, minute=0)
+
+scheduler.start()
+
 # ========== FUNÇÕES AUXILIARES ==========
 def parse_valor(valor_str):
     valor_str = str(valor_str).replace("R$", "").replace(" ", "").strip()
@@ -207,13 +213,22 @@ def gerar_resumo_mensal(chat_id):
         labels = [f"{dia}/{hoje.month}" for dia in sorted(dias)]
         valores = [dias[dia] for dia in sorted(dias)]
         total = sum(valores)
-        resumo = f"📅 Resumo do mês de {hoje.strftime('%B/%Y')}:\n\nTotal: {formatar_valor(total)}\nDias com despesas: {len(dias)}"
+
+        # Dicionário de meses em português
+        meses_pt = {
+            1: 'janeiro', 2: 'fevereiro', 3: 'março', 4: 'abril',
+            5: 'maio', 6: 'junho', 7: 'julho', 8: 'agosto',
+            9: 'setembro', 10: 'outubro', 11: 'novembro', 12: 'dezembro'
+        }
+        mes_ano = f"{meses_pt[hoje.month]}/{str(hoje.year)[2:]}"  # Exemplo: maio/25
+
+        resumo = f"📅 Resumo do mês de {mes_ano}:\n\nTotal: {formatar_valor(total)}\nDias com despesas: {len(dias)}"
         if dias:
             dia_maior = max(dias, key=dias.get)
             resumo += f"\nDia com maior gasto: {dia_maior}/{hoje.month} - {formatar_valor(dias[dia_maior])}"
         if categorias:
             resumo += "\n\n" + detalhar_categorias(categorias, total)
-            grafico_path = gerar_grafico('linha', f"Despesas diárias - {hoje.strftime('%B/%Y')}", valores, labels)
+            grafico_path = gerar_grafico('linha', f"Despesas diárias - {mes_ano}", valores, labels)
             bot.send_message(chat_id=chat_id, text=resumo)
             bot.send_photo(chat_id=chat_id, photo=open(grafico_path, 'rb'))
         else:
