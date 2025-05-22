@@ -65,11 +65,21 @@ timezone_brasilia = timezone("America/Sao_Paulo")
 scheduler = BackgroundScheduler(timezone=timezone_brasilia)
 
 # Função para enviar o lembrete diário
+def enviar_lembrete_diario():
+    mensagem = "⏰ Lembrete: Não se esqueça de registrar suas despesas diárias!"
+    for contato in contatos:
+        try:
+            bot.send_message(chat_id=contato["chat_id"], text=mensagem)
+            logger.info(f"Lembrete diário enviado para {contato['nome']}")
+        except Exception as e:
+            logger.error(f"Erro ao enviar lembrete para {contato['nome']}: {e}")
+            logger.error(traceback.format_exc())
+
 # Adicionar a tarefa de lembrete diário
-scheduler.add_job(enviar_lembrete_diario, 'cron', hour=21, minute=0)
+scheduler.add_job(enviar_lembrete_diario, 'cron', hour=20, minute=0)
 
+# Iniciar o scheduler
 scheduler.start()
-
 # ========== FUNÇÕES AUXILIARES ==========
 def parse_valor(valor_str):
     valor_str = str(valor_str).replace("R$", "").replace(" ", "").strip()
