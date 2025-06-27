@@ -101,7 +101,9 @@ palavras_categoria = {
     "TRANSPORTE": ["uber", "99", "ônibus", "metro", "trem", "corrida", "combustível", "gasolina"],
     "LAZER": ["cinema", "netflix", "bar", "show", "festa", "lazer"],
     "MORADIA": ["aluguel", "condominio", "energia", "água", "internet", "luz"],
-    "SAÚDE": ["farmácia", "higiene", "produto de limpeza", "remédio"]
+    "SAÚDE": ["farmácia", "higiene", "produto de limpeza", "remédio"],
+    "GATOS": ["gatos","areia","sachê","ração"],
+    "ASSINATURA": ["abacus","apple","assinatura","spotify","celular"]
 }
 
 def classificar_categoria(descricao):
